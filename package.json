@@ -1,0 +1,24 @@
+{
+  "name": "wgn-schemas",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "generate:typedefs": "node scripts/generate-typedefs-from-module.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://gitlab.com/techzonesystems/wgn-schemas.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://gitlab.com/techzonesystems/wgn-schemas/issues"
+  },
+  "homepage": "https://gitlab.com/techzonesystems/wgn-schemas#readme",
+  "description": "",
+  "dependencies": {
+    "rxdb": "^16.15.0"
+  }
+}
