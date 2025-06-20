@@ -19,6 +19,7 @@
   "homepage": "https://gitlab.com/techzonesystems/wgn-schemas#readme",
   "description": "",
   "dependencies": {
+    "reconnecting-eventsource": "^1.6.4",
     "rxdb": "^16.15.0"
   }
 }
