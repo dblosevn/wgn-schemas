@@ -1,9 +1,7 @@
+//./index.js
 import path from "path";
 import fs from "fs";
 import { pathToFileURL } from "url";
-import {ServerSocket, ServerSocketClient} from "./sockets/serversocket.js";
-import {ClientSocketHandler, ClientSocket} from "./sockets/clientsocket.js";
-import {getIO} from "./sockets/index.js"
 
 const collections = {};
 const wmCollections = ['assignments', 'invoices', 'payments', 'techinvoices'];
@@ -134,6 +132,6 @@ export async function initWGNCollections(db, useRxReplication = false, isServer 
   const colNames = Object.keys(collections).filter(c => !wmCollections.includes(c));
   return await initCollections(db, colNames, useRxReplication, isServer);
 }
+export {ClientSocket} from "./sockets/clientsocket.js";
 
 export default Schemas;
-export const sockets = {getIO,ServerSocket, ServerSocketClient, ClientSocket, ClientSocketHandler};

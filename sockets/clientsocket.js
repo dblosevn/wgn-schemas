@@ -1,58 +1,13 @@
 // sockets/socketclient.js
-import { replicationSocketServer, replicationSocket } from 'rxdb/plugins/replication-socket';
+import { replicationSocket } from 'rxdb/plugins/replication-socket';
 import { io } from 'socket.io-client';
 import process from 'process';
 
 const ENABLE_SOCKET_LOGGING = process.env.ENABLE_SOCKET_LOGGING === 'true';
-
-// ==============================
-// Server-side: ClientSocketHandler
-// ==============================
-export class ClientSocketHandler {
-  /**
-   * @param {import('socket.io').Socket} socket
-   * @param {RxDatabase} db - RxDB instance with local+remote collections
-   */
-  constructor(socket, db) {
-    this.socket = socket;
-    this.db = db;
-
-    if (ENABLE_SOCKET_LOGGING) {
-      console.log(`[ClientSocketHandler] Client connected: ${socket.id}`);
-    }
-
-    this.setupReplication();
-
-    socket.on('disconnect', () => {
-      if (ENABLE_SOCKET_LOGGING) {
-        console.log(`[ClientSocketHandler] Client disconnected: ${socket.id}`);
-      }
-    });
-  }
-
-  async setupReplication() {
-    const collections = Object.entries(this.db.collections);
-    if (ENABLE_SOCKET_LOGGING) {
-      console.log(`[ClientSocketHandler] Exposing ${collections.length} collections`);
-    }
-
-    for (const [name, collection] of collections) {
-      try {
-        await replicationSocketServer({
-          collection,
-          socket: this.socket,
-        });
-        if (ENABLE_SOCKET_LOGGING) {
-          console.log(`[ClientSocketHandler] Collection exposed: ${name}`);
-        }
-      } catch (err) {
-        if (ENABLE_SOCKET_LOGGING) {
-          console.error(`[ClientSocketHandler] Failed to expose collection "${name}":`, err);
-        }
-      }
-    }
-  }
-}
+const LOG = (...args) => ENABLE_SOCKET_LOGGING && console.log('[SocketClient]', ...args);
+const WARN = (...args) => ENABLE_SOCKET_LOGGING && console.warn('[SocketClient]', ...args);
+const INFO = (...args) => ENABLE_SOCKET_LOGGING && console.info('[SocketClient]', ...args);
+const ERROR = (...args) => ENABLE_SOCKET_LOGGING && console.error('[SocketClient]', ...args);
 
 // ==============================
 // Client-side: ClientSocket
@@ -85,13 +40,13 @@ export class ClientSocket {
     });
 
     this.socket.on('connect', async () => {
-      console.log(`[SocketClient] Connected: ${this.socket.id}`);
+      LOG(`Connected: ${this.socket.id}`);
       this.connected = true;
       await this.replicateAll({ live: this._live, retryTime: this._retryTime });
     });
 
     this.socket.on('disconnect', () => {
-      console.warn('[SocketClient] Disconnected');
+      WARN('Disconnected');
       this.connected = false;
       for (const rep of this.replications.values()) {
         rep.cancel();
@@ -100,15 +55,15 @@ export class ClientSocket {
     });
 
     this.socket.on('reconnect_attempt', attempt => {
-      console.info(`[SocketClient] Reconnect attempt #${attempt}`);
+      INFO(`Reconnect attempt #${attempt}`);
     });
 
     this.socket.on('reconnect_failed', () => {
-      console.error('[SocketClient] Reconnect failed');
+      ERROR('Reconnect failed');
     });
 
     this.socket.on('error', err => {
-      console.error('[SocketClient] Socket error:', err);
+      ERROR('Socket error:', err);
     });
 
     return this.socket;
@@ -124,14 +79,19 @@ export class ClientSocket {
       if (name === 'cache') continue;
       if (this.replications.has(name)) continue;
 
-      const replicationState = await replicationSocket({
-        collection,
-        socket: this.socket,
-        live,
-        retryTime,
-      });
+      try {
+        const replicationState = await replicationSocket({
+          collection,
+          socket: this.socket,
+          live,
+          retryTime,
+        });
 
-      this.replications.set(name, replicationState);
+        this.replications.set(name, replicationState);
+        LOG(`Replicating collection: ${name}`);
+      } catch (err) {
+        ERROR(`Failed to replicate "${name}":`, err);
+      }
     }
   }
 
