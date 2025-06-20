@@ -1,12 +1,15 @@
-import { WMCollections, WGNCollections } from "./typedefs.js";
 import path from "path";
 import fs from "fs";
 import { pathToFileURL } from "url";
+import {ServerSocket, ServerSocketClient} from "./sockets/serversocket.js";
+import {ClientSocketHandler, ClientSocket} from "./sockets/clientsocket.js";
+import {getIO} from "./sockets/index.js"
+
 const collections = {};
 const wmCollections = ['assignments', 'invoices', 'payments', 'techinvoices'];
 
 let resolve, reject;
-const initPromise = new Promise((Resolve, Reject) => {
+const Schemas = new Promise((Resolve, Reject) => {
   resolve = Resolve;
   reject = Reject;
 });
@@ -116,20 +119,21 @@ async function initCollections(db, cols, useRxReplication = false, isServer = fa
       db.addReplicationEndpoint(replicationConfig);
     }
   }
-  
+
   retObj.db = db;
   return retObj;
 }
-/** @returns {Promise<WMCollections>} */
+/** @returns {Promise<import("./typedefs.js").WMCollections>} */
 export async function initWMCollections(db, useRxReplication = false, isServer = false) {
-  await initPromise;
+  await Schemas;
   return await initCollections(db, wmCollections, useRxReplication, isServer);
 }
-/** @returns {Promise<WGNCollections>} */
+/** @returns {Promise<import("./typedefs.js").WGNCollections>} */
 export async function initWGNCollections(db, useRxReplication = false, isServer = false) {
-  await initPromise;
+  await Schemas;
   const colNames = Object.keys(collections).filter(c => !wmCollections.includes(c));
   return await initCollections(db, colNames, useRxReplication, isServer);
 }
 
-export default initPromise;
+export default Schemas;
+export const sockets = {getIO,ServerSocket, ServerSocketClient, ClientSocket, ClientSocketHandler};
