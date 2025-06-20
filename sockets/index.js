@@ -1,4 +1,4 @@
-// backend/server/socket/index.js
+// sockets/index.js
 
 import { Server } from 'socket.io';
 import { getDb } from '../rxdb.js';

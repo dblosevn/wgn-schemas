@@ -1,4 +1,4 @@
-// backend/modules/socketclient.js
+// sockets/socketclient.js
 import { replicationSocketServer, replicationSocket } from 'rxdb/plugins/replication-socket';
 import { io } from 'socket.io-client';
 import process from 'process';
