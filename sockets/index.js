@@ -1,9 +1,7 @@
 // sockets/index.js
 
 import { Server } from 'socket.io';
-import { getDb } from '../rxdb.js';
-import { ServerSocket } from './serversocket.js';
-import { ClientSocketHandler } from './clientsocket.js';
+import { ServerSocket, ClientSocketHandler } from './serversocket.js';
 import process from 'process';
 
 /**
@@ -14,7 +12,8 @@ import process from 'process';
 const ENABLE_SOCKET_LOGGING = process.env.ENABLE_SOCKET_LOGGING === 'true';
 
 let io;
-
+//TODO: changethis
+function getDb() {}
 /**
  * Initializes and returns a singleton Socket.IO server instance.
  *

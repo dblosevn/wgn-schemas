@@ -1,4 +1,3 @@
-import { replicationSocketServer } from 'rxdb/plugins/replication-socket';
 import getIO from './index.js';
 import { io as ioc } from 'socket.io-client';
 import process from 'process';
@@ -79,8 +78,8 @@ export class ServerSocket {
     });
   }
 
-  static initialize() {
-    const p = getIO();
+  static initialize(http) {
+    const p = getIO(http);
     p.then((io) => ServerSocket.io = io);
     return p;
   }

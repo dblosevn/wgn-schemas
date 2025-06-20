@@ -1,20 +1,16 @@
 // sockets/socketclient.js
-import { replicationSocket } from 'rxdb/plugins/replication-socket';
 import { io } from 'socket.io-client';
-import process from 'process';
+import { replicateRxCollection } from 'rxdb/plugins/replication';
 
-const ENABLE_SOCKET_LOGGING = process.env.ENABLE_SOCKET_LOGGING === 'true';
+const ENABLE_SOCKET_LOGGING = true;
 const LOG = (...args) => ENABLE_SOCKET_LOGGING && console.log('[SocketClient]', ...args);
 const WARN = (...args) => ENABLE_SOCKET_LOGGING && console.warn('[SocketClient]', ...args);
 const INFO = (...args) => ENABLE_SOCKET_LOGGING && console.info('[SocketClient]', ...args);
 const ERROR = (...args) => ENABLE_SOCKET_LOGGING && console.error('[SocketClient]', ...args);
 
-// ==============================
-// Client-side: ClientSocket
-// ==============================
 export class ClientSocket {
   /**
-   * @param {RxDatabase} db - The client-side RxDB instance
+   * @param {import('rxdb').RxDatabase} db - The client-side RxDB instance
    */
   constructor(db) {
     this.db = db;
@@ -23,6 +19,8 @@ export class ClientSocket {
     this.connected = false;
     this._live = true;
     this._retryTime = 3000;
+
+    this.connect();
   }
 
   connect() {
@@ -69,26 +67,75 @@ export class ClientSocket {
     return this.socket;
   }
 
+  /**
+   * Helper to emit a message with ack + timeout
+   * @param {string} event
+   * @param {object} payload
+   * @param {number} [timeout=5000]
+   * @returns {Promise<any>}
+   */
+  emitWithAck(event, payload, timeout = 5000) {
+    return new Promise((resolve, reject) => {
+      this.socket
+        .timeout(timeout)
+        .emit(event, payload, (err, result) => {
+          if (err) return reject(err);
+          resolve(result);
+        });
+    });
+  }
+
+  /**
+   * Starts replication for all collections over a single socket
+   * @param {object} options
+   * @param {boolean} [options.live=true]
+   * @param {number} [options.retryTime=3000]
+   */
   async replicateAll({ live = true, retryTime = 3000 } = {}) {
     this._live = live;
     this._retryTime = retryTime;
-
-    this.connect();
 
     for (const [name, collection] of Object.entries(this.db.collections)) {
       if (name === 'cache') continue;
       if (this.replications.has(name)) continue;
 
       try {
-        const replicationState = await replicationSocket({
+        const replicationState = replicateRxCollection({
           collection,
-          socket: this.socket,
+          replicationIdentifier: name,
+          pull: {
+            handler: async (lastCheckpoint, batchSize) => {
+              LOG(`[${name}] PULL`, { lastCheckpoint, batchSize });
+              const response = await this.emitWithAck('rxdb:pull', {
+                collection: name,
+                lastCheckpoint,
+                batchSize,
+              });
+              LOG(`[${name}] PULL response`, response);
+              return response;
+            },
+          },
+          push: {
+            handler: async (docs) => {
+              LOG(`[${name}] PUSH`, docs);
+              const response = await this.emitWithAck('rxdb:push', {
+                collection: name,
+                docs,
+              });
+              LOG(`[${name}] PUSH response`, response);
+              return response;
+            },
+          },
           live,
           retryTime,
         });
 
+        replicationState.error$.subscribe(err => {
+          ERROR(`[${name}] Replication error`, err);
+        });
+
         this.replications.set(name, replicationState);
-        LOG(`Replicating collection: ${name}`);
+        LOG(`Started replication for: ${name}`);
       } catch (err) {
         ERROR(`Failed to replicate "${name}":`, err);
       }

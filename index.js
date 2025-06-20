@@ -1,13 +1,28 @@
 //./index.js
+import dotenv from 'dotenv';
 import path from "path";
 import fs from "fs";
 import { pathToFileURL } from "url";
-import ReconnectingEventSource from "reconnecting-eventsource";
-import { replicateServer } from "rxdb-server/dist/types/plugins/replication-server/index.js";
+if (!process.env.MONGOURL) dotenv.config({ path: path.resolve(path.join('../', '.env')) }); //running in standalone mode
+
+/** @type {'walgreens'} */ export const WALGREENS = 'walgreens';
+/** @type {'workmarket'} */ export const WORKMARKET = 'workmarket';
 
 const collections = {};
-const wmCollections = ['assignments', 'invoices', 'payments', 'techinvoices'];
-
+let wmSchemas = ['assignments', 'invoices', 'payments', 'techinvoices'];
+let wgnSchemas = [];
+const frontendOnly = ['cache'];
+const colMeta = {
+  cache: {
+    cleanupPolicy: {
+      minimumDeletedTime: 1000 * 60 * 60 * 24,
+      minimumCollectionAge: 1000 * 60,
+      runEach: 1000 * 60 * 5,
+      awaitReplicationsInSync: true,
+      waitForLeadership: true,
+    },
+  }
+};
 let resolve, reject;
 const Schemas = new Promise((Resolve, Reject) => {
   resolve = Resolve;
@@ -30,11 +45,15 @@ const Schemas = new Promise((Resolve, Reject) => {
       const schFiles = fs.readdirSync(colPath).filter(d => d !== "Migrations");
       const migrations = {};
       let collectionKey = `${colDir.toLowerCase()}s`;
-      collectionKey = (collectionKey == 'caches') ? 'cache': collectionKey;
+      collectionKey = (collectionKey == 'caches') ? 'cache' : collectionKey;
 
       const collection = (collections[collectionKey] = {
+        name: collectionKey,
+        srcServer: (wmSchemas.indexOf(collectionKey) === -1) ? WALGREENS : WORKMARKET,
         schema: null,
         migrations,
+        frontendOnly: frontendOnly.indexOf(collectionKey) !== -1,
+        meta: colMeta[collectionKey] || null,
         versions: {},
       });
 
@@ -63,136 +82,136 @@ const Schemas = new Promise((Resolve, Reject) => {
         migrations[v] = (await import(pathToFileURL(path.join(migDir, migFile)))).default;
       }
     }
-
+    wgnSchemas = Object.keys(collections).filter(c => !wmSchemas.includes(c));
+    wgnSchemas = wgnSchemas.map((c) => collections[c]);
+    wmSchemas = wmSchemas.map((c) => collections[c]);
     resolve(collections);
   } catch (e) {
     reject(e);
   }
 })();
 
-function myChangeValidator(authData) {
-  return !!authData.data;
-}
-export async function deleteRxDBStoresExceptCache() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('walgreens')
-    request.onsuccess = (event) => {
-      const db = event.target.result
-      const stores = Array.from(db.objectStoreNames)
-      db.close()
-      const deleteRequest = indexedDB.deleteDatabase('walgreens-temp')
-      deleteRequest.onsuccess = () => {
-        const preserveCache = indexedDB.open('walgreens', db.version + 1)
-        preserveCache.onupgradeneeded = (ev) => {
-          const upgradedDb = ev.target.result
-          stores.forEach((store) => {
-            if (store === 'cache') {
-              upgradedDb.createObjectStore('cache', { keyPath: '_id' })
-            }
-          })
-        }
-        preserveCache.onsuccess = () => {
-          preserveCache.result.close()
-          resolve()
-        }
-        preserveCache.onerror = reject
-      }
-      deleteRequest.onerror = reject
-    }
-    request.onerror = reject
-  })
-}
+
+let dbInstance = null;
+let initPromise;
+/**
+ * @typedef {'walgreens' | 'workmarket'} Server
+ * A server identifier, must be either 'walgreens' or 'workmarket'.
+ */
 
 /**
- * @template T
- * @param {import('rxdb').RxDatabase} db
- * @param {string[]} cols
- * @param {boolean} [useRxReplication=false]
- * @param {boolean} [server=false]
- * @returns {Promise<T>}
+ * Initializes the RxDB instance for the given server.
+ *
+ * @param {Server} server - Server key ('walgreens' or 'workmarket')
+ * @param {boolean} [isFrontend=false] - Whether running on frontend
+ * @param {import('http').Server|null} [http=null] - HTTP server for socket setup
+ * @returns {Promise<import('rxdb').RxDatabase>}
  */
-async function initCollections(db, cols, useRxReplication = false, server = false, extColOptions={}) {
-  const colConfig = {};
-  const endpoints = [];
-  const retObj = {};
+export function initDB(server, isFrontend = false, http = null) {
+  if (initPromise) return initPromise;
 
-  for (const col of cols) {
-    const collection = collections[col];
-    if (!collection) {
-      console.warn(`[initCollections] Missing collection "${col}", skipping.`);
-      continue;
-    }
-    if (server && col == 'cache') continue; //cache is a frontend only collection
-    colConfig[col] = {
-      schema: collection.schema,
-      migrationStrategies: collection.migrations,
-    };
-    if (extColOptions[col]) colConfig[col] = Object.assign(colConfig[col], extColOptions[col]);
+  if (!server && !dbInstance) throw new Error('No DB instance and no config');
 
-    endpoints.push({
-      name: `api/rxdb/${col}`,
-      collectionName: col,
-    });
+  return initPromise = new Promise(async (resolve, reject) => {
+    try {
+      let allSchemas = await Schemas;
+
+      const schemas = (server === WALGREENS) ? wgnSchemas : wmSchemas;
+
+      if (isFrontend) {
+          if (server !== WALGREENS) {
+    throw new Error('Frontend DB may only be initialized for WALGREENS');
   }
+        const { getRxStorageDexie } = await import('rxdb/plugins/storage-dexie');
+        const { addRxPlugin, createRxDatabase } = await import('rxdb/plugins/core');
 
-  await db.addCollections(colConfig);
 
-  for (const endpoint of endpoints) {
-    const colName = endpoint.collectionName.charAt(0).toUpperCase() + endpoint.collectionName.slice(1);
-    retObj[colName] = db[endpoint.collectionName];
+        const { RxDBUpdatePlugin } = await import('rxdb/plugins/update');
+        const { RxDBMigrationSchemaPlugin } = await import('rxdb/plugins/migration-schema');
+        const { RxDBStatePlugin } = await import('rxdb/plugins/state');
+        const { RxDBCleanupPlugin } = await import('rxdb/plugins/cleanup');
+        const { RxDBAttachmentsPlugin } = await import('rxdb/plugins/attachments');
+        const { createBlob } = await import('rxdb');
+        const { RxDBLeaderElectionPlugin } = await import('rxdb/plugins/leader-election');
+        const {ClientSocket} = await import('./sockets/clientsocket.js');
 
-    if (useRxReplication) {
-      if (server) {
-        const replicationConfig = {
-          name: endpoint.name,
-          collection: db.collections[endpoint.collectionName],
-          ...(server && { changeValidator: myChangeValidator })
-        };
-        db.addReplicationEndpoint(replicationConfig);
-      } else {
-        let repOptions = {
-            collection: db.collections[endpoint.collectionName],
-            replicationIdentifier: `${endpoint.collectionName}-replication`,
-            url: `/${endpoint.name}/` + db.collections[endpoint.collectionName].schema.version,
-            push: ({documents, collection}) => {
-              const name = collection.name;
-            },
-            pull: ({lastPulledCheckpoint, collection}) => {
-              const name = collection.name;
+        addRxPlugin(RxDBLeaderElectionPlugin);
+        addRxPlugin(RxDBAttachmentsPlugin);
+        addRxPlugin(RxDBCleanupPlugin);
+        addRxPlugin(RxDBStatePlugin);
+        addRxPlugin(RxDBMigrationSchemaPlugin);
+        addRxPlugin(RxDBUpdatePlugin);
 
-            },
-            live: true,
-            autoStart: true,
-            eventSource: ReconnectingEventSource,
-          };
-         const state = replicateServer(repOptions);
+        const db = await createRxDatabase({
+          name: WALGREENS,
+          storage: getRxStorageDexie(),
+          multiInstance: true,
+        });
+        let colOptions = {}
+        for (let entry of Object.values(allSchemas)) {
+          colOptions[entry.name] = {
+            schema: entry.schema,
+            migrationStrategies: entry.migrations
+          }
+          if (entry.meta) {
+            colOptions[entry.name] = Object.assign(colOptions[entry.name], entry.meta);
+          }
+        }
+        db.addCollections(colOptions);
 
-          state.error$.subscribe(err => {
-            console.error(`${endpoint.name} replication error:`, err)
-            if (err?.status === 400 || err?.message?.includes('schema')) {
-              alert('App update required. Clearing outdated data...')
-              deleteRxDBStoresExceptCache().then(() => location.reload())
-            }
-          })
+        new ClientSocket(db);
+
+        dbInstance = db;
+        resolve(dbInstance);
+        return;
       }
+
+      const { createRxDatabase } = await import("rxdb");
+      const { addRxPlugin } = await import('rxdb/plugins/core');
+      const { getRxStorageMongoDB } = await import("rxdb/plugins/storage-mongodb");
+      const { RxDBMigrationSchemaPlugin } = await import('rxdb/plugins/migration-schema');
+      const { RxDBUpdatePlugin } = await import('rxdb/plugins/update');
+      const process = await import("process");
+
+      addRxPlugin(RxDBMigrationSchemaPlugin);
+      addRxPlugin(RxDBUpdatePlugin);
+
+      const uri = process.env.MONGOURL;
+      const db = await createRxDatabase({
+        name: server,
+        multiInstance: true,
+        eventReduce: true,
+        storage: getRxStorageMongoDB({ connection: uri }),
+      });
+      let colOptions = {}
+      for (let entry of schemas) {
+        if (entry.frontendOnly) continue;
+        colOptions[entry.name] = {
+          schema: entry.schema,
+          migrationStrategies: entry.migrations
+        }
+        if (entry.meta) {
+          colOptions[entry.name] = Object.assign(colOptions[entry.name], entry.meta);
+        }
+      }
+      db.addCollections(colOptions);
+
+      if (server === WALGREENS) {
+        const { ServerSocket, ClientSocketHandler } = await import("./sockets/serversocket.js");
+        await ServerSocket.initialize(http);
+        const io = ServerSocket.io;
+        io.of('/server').on('connection', (socket) => new ServerSocket(socket, db));
+        io.on('connection', (socket) => new ClientSocketHandler(socket, db));
+      } else if (server === WORKMARKET) {
+        const { ServerSocketClient } = await import("./sockets/serversocket.js");
+        new ServerSocketClient(process.env.SERVER_PORT, server, db);
+      }
+
+      dbInstance = db;
+      resolve(db);
+    } catch (err) {
+      reject(err);
     }
-  }
-
-  retObj.db = db;
-  return retObj;
+  });
 }
-/** @returns {Promise<import("./typedefs.js").WMCollections>} */
-export async function initWMCollections(db, useRxReplication = false, server = false, colOptions={}) {
-  await Schemas;
-  return await initCollections(db, wmCollections, useRxReplication, server, colOptions);
-}
-/** @returns {Promise<import("./typedefs.js").WGNCollections>} */
-export async function initWGNCollections(db, useRxReplication = false, server = false, colOptions={}) {
-  await Schemas;
-  const colNames = Object.keys(collections).filter(c => !wmCollections.includes(c));
-  return await initCollections(db, colNames, useRxReplication, server, colOptions);
-}
-export { ClientSocket } from "./sockets/clientsocket.js";
-
 export default Schemas;
-export const CURRENT_SCHEMA_VERSION = '5'
