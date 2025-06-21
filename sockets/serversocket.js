@@ -5,6 +5,7 @@ import process from 'process';
 const ENABLE_SOCKET_LOGGING = process.env.ENABLE_SOCKET_LOGGING === 'true';
 const LOG = (...args) => ENABLE_SOCKET_LOGGING && console.log('[ServerSocket]', ...args);
 const WARN = (...args) => ENABLE_SOCKET_LOGGING && console.warn('[ServerSocket]', ...args);
+// eslint-disable-next-line no-unused-vars
 const ERROR = (...args) => ENABLE_SOCKET_LOGGING && console.error('[ServerSocket]', ...args);
 
 /**
@@ -14,15 +15,18 @@ const ERROR = (...args) => ENABLE_SOCKET_LOGGING && console.error('[ServerSocket
 export class ServerSocket {
   static serverSockets = new Map();
   static serverCallbacks = new Map();
+  static initializationPromise;
   static io;
-
+  static router;
+  static http;
+  static useRxServer;
+  static rxServer;
+  static db;
   socket;
-  db;
   serverName;
 
-  constructor(socket, db) {
+  constructor(socket) {
     this.socket = socket;
-    this.db = db;
 
     socket.on('setName', async (serverName) => {
       if (this.serverName) return;
@@ -78,10 +82,60 @@ export class ServerSocket {
     });
   }
 
-  static initialize(http) {
-    const p = getIO(http);
-    p.then((io) => ServerSocket.io = io);
-    return p;
+  static initialize(db, http, router, useRxServer = false) {
+    if (ServerSocket.initializationPromise) {
+      return ServerSocket.initializationPromise;
+    }
+
+    ServerSocket.db = db;
+    ServerSocket.http = http;
+    ServerSocket.router = router;
+    ServerSocket.useRxServer = useRxServer;
+
+    return ServerSocket.initializationPromise = getIO(http).then(async (io) => {
+      ServerSocket.io = io;
+
+      if (useRxServer) {
+        // Add middleware
+        router.use(async (req, res, next) => {
+          try {
+            const username = req.cookies?.username;
+            if (username) {
+              const userDoc = await db.users.findOne({ selector: { username } }).exec();
+              if (userDoc) req.headers.user = userDoc.toJSON();
+            }
+          } catch (err) {
+            WARN(`[ServerSocket] User middleware error:`, err.message);
+          }
+          next();
+        });
+
+        const { createRxServer } = await import('rxdb-server/plugins/server');
+        const { RxServerAdapterExpress } = await import('rxdb-server/plugins/adapter-express');
+
+        const server = ServerSocket.rxServer = await createRxServer({
+          path: "/",
+          database: db,
+          adapter: RxServerAdapterExpress,
+          authHandler: (headers) => ({
+            data: headers.user,
+            validUntil: Date.now() + 60000,
+          }),
+          serverApp: router,
+        });
+
+        for (const [colName, collection] of Object.entries(db.collections)) {
+          LOG('Add Endpoint:', `api/rxdb/${colName}`);
+          server.addReplicationEndpoint({
+            name: `api/rxdb/${colName}`,
+            collection,
+            changeValidator: (authData) => !!authData.data,
+          });
+        }
+      }
+
+      return io;
+    });
   }
 
   static getMessageChannel(serverName) {
@@ -99,8 +153,6 @@ export class ServerSocket {
     ServerSocket.io.of('/server').to(server).emit(event, ...args);
   }
 }
-
-ServerSocket.initialize();
 
 export class ServerSocketClient {
   socket;
@@ -162,10 +214,13 @@ export class ServerSocketClient {
 }
 
 export class ClientSocketHandler {
-  constructor(socket, db) {
-    this.socket = socket;
-    this.db = db;
+  socket;
+  db;
+  states = {};
 
+  constructor(socket) {
+    this.socket = socket;
+    this.db = ServerSocket.db;
     LOG(`[ClientSocketHandler] Client connected: ${socket.id}`);
     this.setupReplication();
 
@@ -177,17 +232,5 @@ export class ClientSocketHandler {
   async setupReplication() {
     const collections = Object.entries(this.db.collections);
     LOG(`[ClientSocketHandler] Exposing ${collections.length} collections`);
-
-    for (const [name, collection] of collections) {
-      try {
-        await replicationSocketServer({
-          collection,
-          socket: this.socket,
-        });
-        LOG(`[ClientSocketHandler] Collection exposed: ${name}`);
-      } catch (err) {
-        ERROR(`[ClientSocketHandler] Failed to expose collection "${name}":`, err);
-      }
-    }
   }
 }

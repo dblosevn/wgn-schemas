@@ -1,6 +1,8 @@
-import Schemas, {initDB} from "./index.js";
+import {getDB, initWalgreensDB} from "./index.js";
 
 (async () => {
-  const schemas = await Schemas;
-  await initDB('walgreens', false);
+  await initWalgreensDB();
+  const {Users} = await getDB();
+  const users = await Users.find().exec();
+  console.log(users);
 })();
