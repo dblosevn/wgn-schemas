@@ -1,12 +1,14 @@
-// sockets/socketclient.js
+//sockets/socketclient.js
 import { io } from 'socket.io-client';
 import { replicateRxCollection } from 'rxdb/plugins/replication';
+import { Subject } from 'rxjs';
 
 const ENABLE_SOCKET_LOGGING = true;
 const LOG = (...args) => ENABLE_SOCKET_LOGGING && console.log('[SocketClient]', ...args);
 const WARN = (...args) => ENABLE_SOCKET_LOGGING && console.warn('[SocketClient]', ...args);
 const INFO = (...args) => ENABLE_SOCKET_LOGGING && console.info('[SocketClient]', ...args);
 const ERROR = (...args) => ENABLE_SOCKET_LOGGING && console.error('[SocketClient]', ...args);
+
 
 export class ClientSocket {
   /**
@@ -26,11 +28,11 @@ export class ClientSocket {
   connect() {
     if (this.socket) return this.socket;
 
-    const baseURL = import.meta.env?.VITE_SOCKET_URL || window.location.origin;
+    const baseURL = window.location.origin;
 
     this.socket = io(baseURL, {
       path: '/api/rxdb/stream',
-      transports: ['websocket'],
+      transports: ['polling'],
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
@@ -84,7 +86,29 @@ export class ClientSocket {
         });
     });
   }
+  #getStream(collection) {
+    const stream$ = new Subject();
+    let firstOpen = true;
 
+    const streamEvent = `stream:${collection}`;
+
+    const messageHandler = (data) => stream$.next(data);
+    const reconnectHandler = () => {
+      if (!firstOpen) stream$.next('RESYNC');
+      firstOpen = false;
+    };
+    const disconnectHandler = () => {
+      this.socket.off(streamEvent, messageHandler);
+      this.socket.off('connect', reconnectHandler);
+      this.socket.off('disconnect', disconnectHandler);
+    };
+
+    this.socket.on(streamEvent, messageHandler);
+    this.socket.on('connect', reconnectHandler);
+    this.socket.on('disconnect', disconnectHandler);
+
+    return stream$.asObservable();
+  }
   /**
    * Starts replication for all collections over a single socket
    * @param {object} options
@@ -95,31 +119,32 @@ export class ClientSocket {
     this._live = live;
     this._retryTime = retryTime;
 
-    for (const [name, collection] of Object.entries(this.db.collections)) {
+    for (let [name, collection] of Object.entries(this.db.collections)) {
       if (name === 'cache') continue;
       if (this.replications.has(name)) continue;
 
       try {
         const replicationState = replicateRxCollection({
           collection,
-          replicationIdentifier: name,
+          replicationIdentifier: `${name}-replication`,
           pull: {
             handler: async (lastCheckpoint, batchSize) => {
-              LOG(`[${name}] PULL`, { lastCheckpoint, batchSize });
               const response = await this.emitWithAck('rxdb:pull', {
                 collection: name,
+                version: collection.schema.version,
                 lastCheckpoint,
                 batchSize,
               });
-              LOG(`[${name}] PULL response`, response);
               return response;
             },
+            stream$: this.#getStream(name)
           },
           push: {
             handler: async (docs) => {
-              LOG(`[${name}] PUSH`, docs);
+              LOG(`[${name}] PUSH`, docs.length);
               const response = await this.emitWithAck('rxdb:push', {
                 collection: name,
+                version: collection.schema.version,
                 docs,
               });
               LOG(`[${name}] PUSH response`, response);

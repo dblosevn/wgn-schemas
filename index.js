@@ -3,6 +3,7 @@
 /** @type {'walgreens'} */ export const WALGREENS = 'walgreens';
 /** @type {'workmarket'} */ export const WORKMARKET = 'workmarket';
 export const CURRENT_SCHEMA_VERSION = 5;
+const useRxReplication = false;
 
 let collections = {};
 let wmSchemas = ['assignments', 'invoices', 'payments', 'techinvoices'];
@@ -222,7 +223,7 @@ async function initDB(server, isFrontend = false, http = null, router = null) {
       for (const [name, collection] of Object.entries(db.collections)) {
         try {
           const frontendOnly = collections[name].frontendOnly;
-          if (!frontendOnly) {
+          if (!frontendOnly && useRxReplication) {
             const state = replicateServer({
               collection,
               replicationIdentifier: `${name}-replication`,
@@ -289,11 +290,8 @@ async function initDB(server, isFrontend = false, http = null, router = null) {
     await db.addCollections(colOptions);
 
     if (server === WALGREENS) {
-      const { ServerSocket, ClientSocketHandler } = await import("./sockets/serversocket.js");
+      const { ServerSocket } = await import("./sockets/serversocket.js");
       await ServerSocket.initialize(db, http, router, true);
-      const io = ServerSocket.io;
-      io.of('/server').on('connection', (socket) => new ServerSocket(socket));
-      io.on('connection', (socket) => new ClientSocketHandler(socket));
     } else if (server === WORKMARKET) {
       const { ServerSocketClient } = await import("./sockets/serversocket.js");
       new ServerSocketClient(process.env.SERVER_PORT, server, db);

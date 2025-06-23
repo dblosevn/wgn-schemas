@@ -19,7 +19,8 @@
   "homepage": "https://gitlab.com/techzonesystems/wgn-schemas#readme",
   "description": "",
   "dependencies": {
-    "devalue": "^5.1.1",
+  },
+  "devDependencies": {
     "express": "^4.21.2",
     "rxdb": "^16.15.0",
     "rxdb-server": "^16.8.1",

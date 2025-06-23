@@ -1,6 +1,8 @@
 import getIO from './index.js';
 import { io as ioc } from 'socket.io-client';
 import process from 'process';
+import { app } from '../../backend/server/index.js';
+import cookie from "cookie";
 
 const ENABLE_SOCKET_LOGGING = process.env.ENABLE_SOCKET_LOGGING === 'true';
 const LOG = (...args) => ENABLE_SOCKET_LOGGING && console.log('[ServerSocket]', ...args);
@@ -15,7 +17,8 @@ const ERROR = (...args) => ENABLE_SOCKET_LOGGING && console.error('[ServerSocket
 export class ServerSocket {
   static serverSockets = new Map();
   static serverCallbacks = new Map();
-  static initializationPromise;
+  /** @type {Map<string, import('rxjs').Subscription>} */
+  static pullStreamSubscriptions = new Map(); static initializationPromise;
   static io;
   static router;
   static http;
@@ -94,7 +97,6 @@ export class ServerSocket {
 
     return ServerSocket.initializationPromise = getIO(http).then(async (io) => {
       ServerSocket.io = io;
-
       if (useRxServer) {
         // Add middleware
         router.use(async (req, res, next) => {
@@ -131,6 +133,14 @@ export class ServerSocket {
             collection,
             changeValidator: (authData) => !!authData.data,
           });
+          for (const [name, collection] of Object.entries(db.collections)) {
+            const sub = collection.$.subscribe(change => {
+              if (change.operation === 'UPDATE' || change.operation === 'INSERT') {
+                ServerSocket.io.to(`pullstream:${name}`).emit(`stream:${name}`, 'RESYNC');
+              }
+            });
+            ServerSocket.pullStreamSubscriptions.set(name, sub);
+          }
         }
       }
 
@@ -223,7 +233,60 @@ export class ClientSocketHandler {
     this.db = ServerSocket.db;
     LOG(`[ClientSocketHandler] Client connected: ${socket.id}`);
     this.setupReplication();
+    socket.on('rxdb:push', async ({ collection, version, docs }, callback) => {
+      const cookies = cookie.parse(socket.handshake.headers.cookie);
+      console.log('rxdb:push:' + cookies.username, collection, docs.length);
 
+      try {
+        app.runMiddleware(`/api/rxdb/${collection}/${version}/push`, {
+          headers: { 'content-type': 'application/json' },
+          method: 'post',
+          query: {},
+          body: docs,
+          cookies,
+        }, (code, body) => {
+          if (code !== 200) {
+            console.warn(`Push failed with status ${code}`);
+            return callback({ error: true, status: code });
+          }
+
+          try {
+            const parsed = JSON.parse(body);
+            callback(parsed);
+          } catch (err) {
+            console.warn('Failed to parse push response:', err);
+            callback({ error: true, message: 'Invalid JSON from server' });
+          }
+        });
+      } catch (err) {
+        console.error('rxdb:push middleware error:', err);
+        callback({ error: true, message: err.message });
+      }
+    });
+    socket.on('rxdb:pull', async ({ collection, version, lastCheckpoint, batchSize }, callback) => {
+      const cookies = cookie.parse(socket.handshake.headers.cookie);
+      console.log('rxdb:pull:' + cookies.username, collection, batchSize);
+
+      try {
+        app.runMiddleware(`/api/rxdb/${collection}/${version}/pull`, {
+          headers: { 'content-type': 'application/json' },
+          method: 'get',
+          query: { lwt: lastCheckpoint, limit: batchSize },
+          cookies,
+        }, (code, body) => {
+          try {
+            const parsed = JSON.parse(body);
+            callback(parsed);
+          } catch (err) {
+            console.warn('Failed to parse pull response:', err);
+            callback({ documents: [], checkpoint: lastCheckpoint }); // safe fallback
+          }
+        });
+      } catch (err) {
+        console.error('rxdb:pull middleware error:', err);
+        callback({ documents: [], checkpoint: lastCheckpoint });
+      }
+    });
     socket.on('disconnect', () => {
       LOG(`[ClientSocketHandler] Client disconnected: ${socket.id}`);
     });
@@ -231,6 +294,9 @@ export class ClientSocketHandler {
 
   async setupReplication() {
     const collections = Object.entries(this.db.collections);
+    for (const [name] of collections) {
+      this.socket.join(`pullstream:${name}`);
+    }
     LOG(`[ClientSocketHandler] Exposing ${collections.length} collections`);
   }
 }

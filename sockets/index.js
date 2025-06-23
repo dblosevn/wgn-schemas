@@ -2,18 +2,19 @@
 
 import { Server } from 'socket.io';
 import { ServerSocket, ClientSocketHandler } from './serversocket.js';
-import process from 'process';
+import { getDb } from '../index.js';
+//import process from 'process';
 
 /**
  * Toggle logging for socket connections and security rejections.
  * Controlled via `ENABLE_SOCKET_LOGGING=true` in the environment.
  * @type {boolean}
  */
-const ENABLE_SOCKET_LOGGING = process.env.ENABLE_SOCKET_LOGGING === 'true';
+//const ENABLE_SOCKET_LOGGING = process.env.ENABLE_SOCKET_LOGGING === 'true';
+const ENABLE_SOCKET_LOGGING = true;
 
 let io;
-//TODO: changethis
-function getDb() {}
+
 /**
  * Initializes and returns a singleton Socket.IO server instance.
  *
@@ -34,8 +35,6 @@ export async function getIO(http) {
       methods: ['GET', 'POST'],
     },
   });
-
-  const db = await getDb();
 
   // Middleware to restrict /server namespace to direct localhost connections
   io.of('/server').use((socket, next) => {
@@ -58,7 +57,8 @@ export async function getIO(http) {
   });
 
   // Trusted RxDB server connects to /server for remote sync
-  io.of('/server').on('connection', (socket) => {
+  io.of('/server').on('connection', async (socket) => {
+    const db = await getDb();
     const ip = socket.handshake.address;
     if (ENABLE_SOCKET_LOGGING) {
       console.log(`[ServerSocket] Connected to /server :: ${socket.id} @ ${ip} (${new Date().toISOString()})`);
@@ -67,8 +67,9 @@ export async function getIO(http) {
   });
 
   // Frontend client connects to default namespace /
-  io.on('connection', (socket) => {
-    const ip = socket.handshake.address || socket.request.connection.remoteAddress;
+  io.on('connection', async (socket) => {
+   const db = await getDb();
+   const ip = socket.handshake.address || socket.request.connection.remoteAddress;
     const forwarded = socket.handshake.headers['x-forwarded-for'];
     if (ENABLE_SOCKET_LOGGING) {
       console.log(`[ClientSocketHandler] Connected to / :: ${socket.id} @ ${forwarded || ip} (${new Date().toISOString()})`);
