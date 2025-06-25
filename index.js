@@ -63,7 +63,7 @@ async function initSchemas(isFrontend = false) {
 
         for (const schFile of schFiles) {
           const filePath = path.join(colPath, schFile);
-          const current = (await import(pathToFileURL(filePath))).default;
+          const current = (await import(/* @vite-ignore */ pathToFileURL(filePath))).default;
 
           if (current?.version === undefined || current?.version === null) {
             throw new Error(`Schema file "${schFile}" is missing a version`);

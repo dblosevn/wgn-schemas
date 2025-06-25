@@ -34,6 +34,8 @@ export async function getIO(http) {
       origin: '*',
       methods: ['GET', 'POST'],
     },
+    pingInterval: 5000,
+    pingTimeout: 7000
   });
 
   // Middleware to restrict /server namespace to direct localhost connections

@@ -32,7 +32,7 @@ export class ClientSocket {
 
     this.socket = io(baseURL, {
       path: '/api/rxdb/stream',
-      transports: ['polling'],
+      transports: ['websocket'],
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
@@ -160,6 +160,7 @@ export class ClientSocket {
         });
 
         this.replications.set(name, replicationState);
+        replicationState.reSync(); // <--- triggers a push/pull cycle manually
         LOG(`Started replication for: ${name}`);
       } catch (err) {
         ERROR(`Failed to replicate "${name}":`, err);
