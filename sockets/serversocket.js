@@ -1,8 +1,6 @@
 import getIO from './index.js';
 import { io as ioc } from 'socket.io-client';
 import process from 'process';
-import { app } from '../../backend/server/index.js';
-import cookie from "cookie";
 
 const ENABLE_SOCKET_LOGGING = process.env.ENABLE_SOCKET_LOGGING === 'true';
 const LOG = (...args) => ENABLE_SOCKET_LOGGING && console.log('[ServerSocket]', ...args);
@@ -25,6 +23,8 @@ export class ServerSocket {
   static useRxServer;
   static rxServer;
   static db;
+  static app;
+  static cookie;
   socket;
   serverName;
 
@@ -85,7 +85,12 @@ export class ServerSocket {
     });
   }
 
-  static initialize(db, http, router, useRxServer = false) {
+  static async initialize(db, http, router, useRxServer = false) {
+    const { app } = await import('../../backend/server/index.js');
+    const cookie = await import("cookie");
+    ServerSocket.app = app;
+    ServerSocket.cookie = cookie;
+
     if (ServerSocket.initializationPromise) {
       return ServerSocket.initializationPromise;
     }
@@ -234,11 +239,11 @@ export class ClientSocketHandler {
     LOG(`[ClientSocketHandler] Client connected: ${socket.id}`);
     this.setupReplication();
     socket.on('rxdb:push', async ({ collection, version, docs }, callback) => {
-      const cookies = cookie.parse(socket.handshake.headers.cookie);
+      const cookies = ServerSocket.cookie.parse(socket.handshake.headers.cookie);
       console.log('rxdb:push:' + cookies.username, collection, docs.length);
 
       try {
-        app.runMiddleware(`/api/rxdb/${collection}/${version}/push`, {
+        ServerSocket.app.runMiddleware(`/api/rxdb/${collection}/${version}/push`, {
           headers: { 'content-type': 'application/json' },
           method: 'post',
           query: {},
@@ -264,11 +269,11 @@ export class ClientSocketHandler {
       }
     });
     socket.on('rxdb:pull', async ({ collection, version, lastCheckpoint, batchSize }, callback) => {
-      const cookies = cookie.parse(socket.handshake.headers.cookie);
+      const cookies = ServerSocket.cookie.parse(socket.handshake.headers.cookie);
       console.log('rxdb:pull:' + cookies.username, collection, batchSize);
 
       try {
-        app.runMiddleware(`/api/rxdb/${collection}/${version}/pull`, {
+        ServerSocket.app.runMiddleware(`/api/rxdb/${collection}/${version}/pull`, {
           headers: { 'content-type': 'application/json' },
           method: 'get',
           query: { lwt: lastCheckpoint, limit: batchSize },
