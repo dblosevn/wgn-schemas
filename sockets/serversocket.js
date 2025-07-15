@@ -1,6 +1,7 @@
 import getIO from './index.js';
 import { io as ioc } from 'socket.io-client';
 import process from 'process';
+import { init } from '../../backend/server/index.js';
 
 const ENABLE_SOCKET_LOGGING = process.env.ENABLE_SOCKET_LOGGING === 'true';
 const LOG = (...args) => ENABLE_SOCKET_LOGGING && console.log('[ServerSocket]', ...args);
@@ -86,7 +87,9 @@ export class ServerSocket {
   }
 
   static async initialize(db, http, router, useRxServer = false) {
-    const { app } = await import('../../backend/server/index.js');
+    console.log('init2')
+    const app = await init();
+    console.log(app);
     const cookie = await import("cookie");
     ServerSocket.app = app;
     ServerSocket.cookie = cookie;

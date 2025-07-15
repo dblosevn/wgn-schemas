@@ -2,7 +2,7 @@
 
 import { Server } from 'socket.io';
 import { ServerSocket, ClientSocketHandler } from './serversocket.js';
-import { getDb } from '../index.js';
+import { getDb } from '../initSchemas.server.js';
 //import process from 'process';
 
 /**
